@@ -1,0 +1,11 @@
+# Binary Installers and Executables
+*.exe
+pgadmin4-9.10-x64.exe
+postgresql-18.1-1-windows-x64.exe
+
+# Python Compiled Files
+__pycache__/
+*.pyc
+
+# Specific large data files/browser saves
+binance_browser_collector_save_test (1) (2) (1).html
