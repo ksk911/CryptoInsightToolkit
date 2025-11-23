@@ -93,7 +93,7 @@ with st.sidebar:
     # Timeframe Selection
     timeframe = st.selectbox("Timeframe", ["1s", "1m", "5m"], index=1, key="tf")
     
-    # --- START NEW/MODIFIED CODE BLOCK (Data Source Selector) ---
+    # --- Data Source Selector (Previously Added) ---
     st.markdown("---")
     st.header("Data Source")
 
@@ -118,12 +118,21 @@ with st.sidebar:
     )
     # Ensure the session state is updated if the user selects the mode
     st.session_state.analysis_source = analysis_mode 
-    # --- END NEW/MODIFIED CODE BLOCK (Data Source Selector) ---
+    # --- End Data Source Selector ---
     
     # Analysis Parameters
     st.subheader("Parameters")
     lookback = st.slider("Lookback Period", 20, 200, 100, help="Number of candles to analyze")
     zscore_window = st.slider("Z-Score Window", 10, 50, 20, help="Rolling window for z-score calculation")
+    
+    # --- NEW: Regression Type Control ---
+    regression_type = st.selectbox(
+        "Regression Type",
+        options=["OLS (Ordinary Least Squares)", "Kalman Filter (Extension)"],
+        index=0,
+        help="Select the method for calculating the optimal hedge ratio."
+    )
+    # --- END NEW ---
     
     # Trading Thresholds
     st.subheader("Trading Thresholds")
@@ -143,13 +152,14 @@ with st.sidebar:
 # DATA LOADING CACHED FUNCTION (MODIFIED SIGNATURE)
 # ============================================
 
-# ADD 'analysis_mode' as a parameter to the function
+# ADD 'analysis_mode' and 'regression_type' as parameters
 @st.cache_data(ttl=refresh_rate, show_spinner=False)
-def load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode): # <--- MODIFIED
+def load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode, regression_type): # <--- MODIFIED
     """Load paired candle data from database or uploaded table."""
     try:
         # Pass the analysis_mode to the actual data loading utility in analytics.py
-        df = get_paired_candles(engine, symbol1, symbol2, timeframe, lookback, analysis_mode) # <--- MODIFIED
+        # NOTE: regression_type is currently not used here, but passed for architectural completeness
+        df = get_paired_candles(engine, symbol1, symbol2, timeframe, lookback, analysis_mode)
         return df
     except Exception as e:
         # Note: st.error/st.stop() cannot be used inside cached functions
@@ -161,12 +171,12 @@ def load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode): #
 
 # The Fragment decorator handles scheduling and isolating the rerun, replacing time.sleep/st.rerun
 @st.experimental_fragment(run_every="5s") # Using 5s as a static default for stability
-def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_window, entry_threshold, exit_threshold, analysis_mode): # <--- MODIFIED
+def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_window, entry_threshold, exit_threshold, analysis_mode, regression_type): # <--- MODIFIED
     
     # Load data with spinner
     with st.spinner(f"Loading {symbol1}/{symbol2} data..."):
-        # Pass the analysis_mode variable to load_analytics_data
-        df = load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode) # <--- MODIFIED
+        # Pass the analysis_mode and regression_type variables to load_analytics_data
+        df = load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode, regression_type) # <--- MODIFIED
 
     # Check if data is available
     if df is None or df.empty or len(df) < 10:
@@ -184,13 +194,16 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
         return # Use 'return' instead of st.stop() inside a fragment
 
     # ============================================
-    # RUN ANALYTICS CALCULATIONS (UNCHANGED LOGIC)
+    # RUN ANALYTICS CALCULATIONS 
+    # NOTE: If regression_type changes, this section should eventually use that value.
+    # Currently, it defaults to OLS inside calculate_hedge_ratio.
     # ============================================
     try:
         prices1 = df[f'price_{symbol1.lower()}']
         prices2 = df[f'price_{symbol2.lower()}']
         
-        hedge_result = analytics.calculate_hedge_ratio(prices1, prices2)
+        # In a future update, you would pass regression_type here
+        hedge_result = analytics.calculate_hedge_ratio(prices1, prices2) 
         
         if hedge_result is None:
             st.error("❌ Could not calculate hedge ratio. Need more data.")
@@ -219,7 +232,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
         return
 
     # ============================================
-    # PREPARE METRICS FOR ALERT CHECKING (UNCHANGED LOGIC)
+    # PREPARE METRICS FOR ALERT CHECKING 
     # ============================================
     current_metrics = {}
     if zscore is not None and not zscore.dropna().empty:
@@ -233,7 +246,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
         current_metrics['r_squared'] = hedge_result['r_squared']
 
     # ============================================
-    # CHECK AND DISPLAY TRIGGERED ALERTS (UNCHANGED LOGIC)
+    # CHECK AND DISPLAY TRIGGERED ALERTS 
     # ============================================
     triggered_alerts = st.session_state.alert_manager.check_alerts(current_metrics)
 
@@ -241,11 +254,10 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
         alert_components.display_triggered_alerts(triggered_alerts)
 
     # ============================================
-    # KEY METRICS DISPLAY (UNCHANGED DISPLAY)
+    # KEY METRICS DISPLAY 
     # ============================================
 
     st.markdown("### 📈 Key Metrics")
-    # ... (Metrics row display code follows) ...
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         if hedge_result:
@@ -267,10 +279,9 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     st.markdown("---")
 
     # ============================================
-    # CHART 1: PRICE COMPARISON (UNCHANGED DISPLAY)
+    # CHART 1: PRICE COMPARISON 
     # ============================================
     st.markdown("### 💹 Price Comparison")
-    # ... (Fig 1 plot code follows) ...
     fig1 = make_subplots(specs=[[{"secondary_y": True}]])
     fig1.add_trace(go.Scatter(x=df['time'], y=prices1, name=symbol1, line=dict(color='#00ff87', width=2)), secondary_y=False)
     fig1.add_trace(go.Scatter(x=df['time'], y=prices2, name=symbol2, line=dict(color='#ff3860', width=2)), secondary_y=True)
@@ -281,12 +292,11 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     st.markdown("---")
 
     # ============================================
-    # CHART 2 & 3: SPREAD & Z-SCORE (UNCHANGED DISPLAY)
+    # CHART 2 & 3: SPREAD & Z-SCORE 
     # ============================================
     if spread is not None and zscore is not None and not zscore.dropna().empty:
         st.markdown("### 📊 Spread & Z-Score Analysis")
-        # ... (Spread chart and Z-Score chart code follows, including alert buttons) ...
-        # (All code from line 351 to 512 remains here)
+        # Spread chart
         st.markdown("#### 📈 Spread (Price Difference)")
         fig_spread = go.Figure()
         fig_spread.add_trace(go.Scatter(x=df['time'], y=spread, name='Spread', line=dict(color='#3b82f6', width=2)))
@@ -341,11 +351,10 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     st.markdown("")
 
     # ============================================
-    # CHART 4: ROLLING CORRELATION (UNCHANGED DISPLAY)
+    # CHART 4: ROLLING CORRELATION 
     # ============================================
     if correlation is not None and not correlation.dropna().empty:
         st.markdown("### 🔗 Rolling Correlation")
-        # ... (Fig 3 plot code follows) ...
         fig3 = go.Figure()
         fig3.add_trace(go.Scatter(x=df['time'], y=correlation, name='Correlation', fill='tozeroy', line=dict(color='#8b5cf6', width=2)))
         fig3.add_hline(y=0.7, line_dash="dash", line_color="green", annotation_text="Strong Correlation")
@@ -371,7 +380,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     st.markdown("---")
 
     # ============================================
-    # STATISTICS PANEL (UNCHANGED DISPLAY)
+    # STATISTICS PANEL 
     # ============================================
     st.markdown("### 📋 Detailed Statistics")
     col1, col2 = st.columns(2)
@@ -393,7 +402,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     st.markdown("---")
 
     # ============================================
-    # TRADING SIGNALS (UNCHANGED DISPLAY)
+    # TRADING SIGNALS 
     # ============================================
     if signals is not None and zscore is not None and not zscore.dropna().empty:
         st.markdown("### 🎯 Current Trading Signal")
@@ -432,7 +441,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
 # MAIN EXECUTION CALL (MODIFIED ARGUMENTS)
 # ============================================
 
-# Call the fragment function, passing all necessary sidebar variables as arguments, including the new analysis_mode.
+# Call the fragment function, passing all necessary sidebar variables as arguments, including the new analysis_mode and regression_type.
 display_analytics_dashboard(
     symbol1, 
     symbol2, 
@@ -441,7 +450,8 @@ display_analytics_dashboard(
     zscore_window, 
     entry_threshold, 
     exit_threshold,
-    st.session_state.analysis_source # <--- NEW ARGUMENT
+    st.session_state.analysis_source,
+    regression_type 
 )
 
 # ============================================
