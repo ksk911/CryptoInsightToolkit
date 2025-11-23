@@ -93,6 +93,33 @@ with st.sidebar:
     # Timeframe Selection
     timeframe = st.selectbox("Timeframe", ["1s", "1m", "5m"], index=1, key="tf")
     
+    # --- START NEW/MODIFIED CODE BLOCK (Data Source Selector) ---
+    st.markdown("---")
+    st.header("Data Source")
+
+    # Initialize state variable for the analysis source
+    if 'analysis_source' not in st.session_state:
+        st.session_state.analysis_source = "Live Candles (DB)"
+        
+    # Check if an uploaded file exists (set by Upload_Data.py)
+    uploaded_ready = st.session_state.get('uploaded_data_ready', False)
+
+    options = ["Live Candles (DB)"]
+    if uploaded_ready:
+        options.append("Uploaded File")
+
+    analysis_mode = st.radio(
+        "Select Source",
+        options,
+        # Set the index based on the current state, handling cases where the 'Uploaded File' option is present or not
+        index=options.index(st.session_state.analysis_source) if st.session_state.analysis_source in options else 0,
+        key='analysis_mode_radio',
+        help="Switch between live stream data and a file uploaded via the 'Upload Data' page."
+    )
+    # Ensure the session state is updated if the user selects the mode
+    st.session_state.analysis_source = analysis_mode 
+    # --- END NEW/MODIFIED CODE BLOCK (Data Source Selector) ---
+    
     # Analysis Parameters
     st.subheader("Parameters")
     lookback = st.slider("Lookback Period", 20, 200, 100, help="Number of candles to analyze")
@@ -113,41 +140,47 @@ with st.sidebar:
     st.caption(f"🕐 Last update: {datetime.now().strftime('%H:%M:%S')}")
 
 # ============================================
-# DATA LOADING CACHED FUNCTION (REMAINS UNCHANGED)
+# DATA LOADING CACHED FUNCTION (MODIFIED SIGNATURE)
 # ============================================
 
+# ADD 'analysis_mode' as a parameter to the function
 @st.cache_data(ttl=refresh_rate, show_spinner=False)
-def load_analytics_data(symbol1, symbol2, timeframe, lookback):
-    """Load paired candle data from database"""
+def load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode): # <--- MODIFIED
+    """Load paired candle data from database or uploaded table."""
     try:
-        df = get_paired_candles(engine, symbol1, symbol2, timeframe, lookback)
+        # Pass the analysis_mode to the actual data loading utility in analytics.py
+        df = get_paired_candles(engine, symbol1, symbol2, timeframe, lookback, analysis_mode) # <--- MODIFIED
         return df
     except Exception as e:
         # Note: st.error/st.stop() cannot be used inside cached functions
         return None
 
 # ============================================
-# FRAGMENT: DYNAMIC DASHBOARD CONTENT
+# FRAGMENT: DYNAMIC DASHBOARD CONTENT (MODIFIED SIGNATURE AND CALL)
 # ============================================
 
 # The Fragment decorator handles scheduling and isolating the rerun, replacing time.sleep/st.rerun
 @st.experimental_fragment(run_every="5s") # Using 5s as a static default for stability
-def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_window, entry_threshold, exit_threshold):
+def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_window, entry_threshold, exit_threshold, analysis_mode): # <--- MODIFIED
     
     # Load data with spinner
     with st.spinner(f"Loading {symbol1}/{symbol2} data..."):
-        # Pass the refresh_rate variable to the cache key, which ensures cache reset on slider change
-        df = load_analytics_data(symbol1, symbol2, timeframe, lookback)
+        # Pass the analysis_mode variable to load_analytics_data
+        df = load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode) # <--- MODIFIED
 
     # Check if data is available
     if df is None or df.empty or len(df) < 10:
-        st.warning(f"⏳ No data available for {symbol1}/{symbol2}")
-        st.info("""
-        **Troubleshooting:**
-        1. Make sure websocket_test.py is running (collecting ticks)
-        2. Make sure build_ohlc.py is running (generating candles)
-        3. Wait a few minutes for data to accumulate
-        """)
+        # Adjusted warning message based on data source
+        if analysis_mode == "Uploaded File":
+            st.warning("⏳ No data available from the Uploaded File. Please check the 'Upload Data' page.")
+        else:
+            st.warning(f"⏳ No live data available for {symbol1}/{symbol2}")
+            st.info("""
+            **Troubleshooting:**
+            1. Make sure websocket_test.py is running (collecting ticks)
+            2. Make sure build_ohlc.py is running (generating candles)
+            3. Wait a few minutes for data to accumulate
+            """)
         return # Use 'return' instead of st.stop() inside a fragment
 
     # ============================================
@@ -396,12 +429,20 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
 
 
 # ============================================
-# MAIN EXECUTION CALL
+# MAIN EXECUTION CALL (MODIFIED ARGUMENTS)
 # ============================================
 
-# Call the fragment function, passing all necessary sidebar variables as arguments.
-# This ensures that changing any sidebar value (which triggers a full rerun) immediately updates the fragment content.
-display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_window, entry_threshold, exit_threshold)
+# Call the fragment function, passing all necessary sidebar variables as arguments, including the new analysis_mode.
+display_analytics_dashboard(
+    symbol1, 
+    symbol2, 
+    timeframe, 
+    lookback, 
+    zscore_window, 
+    entry_threshold, 
+    exit_threshold,
+    st.session_state.analysis_source # <--- NEW ARGUMENT
+)
 
 # ============================================
 # NOTE: The old time.sleep(refresh_rate) and st.rerun() are REMOVED.

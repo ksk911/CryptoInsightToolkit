@@ -5,6 +5,10 @@ from statsmodels.regression.linear_model import OLS
 from statsmodels.tools.tools import add_constant
 from statsmodels.tsa.stattools import adfuller
 
+# --- CONFIGURATION FOR UPLOAD ---
+UPLOAD_TABLE_NAME = "user_uploaded_ohlc" 
+# --- END CONFIGURATION ---
+
 class PairsAnalytics:
     """Statistical analytics for pairs trading strategies"""
     
@@ -102,38 +106,72 @@ class PairsAnalytics:
             return None
 
 
-def get_paired_candles(engine, symbol1, symbol2, timeframe='1m', limit=100):
-    """Load and align candle data for two symbols"""
-    try:
-        table_name = f"candles_{timeframe}"
-        
-        # Load symbol1
-        query1 = f"""
-            SELECT time, close as price_{symbol1.lower()}
-            FROM {table_name}
-            WHERE symbol = '{symbol1}'
-            ORDER BY time DESC
-            LIMIT {limit}
-        """
-        df1 = pd.read_sql(query1, engine)
-        df1['time'] = pd.to_datetime(df1['time'])
-        
-        # Load symbol2
-        query2 = f"""
-            SELECT time, close as price_{symbol2.lower()}
-            FROM {table_name}
-            WHERE symbol = '{symbol2}'
-            ORDER BY time DESC
-            LIMIT {limit}
-        """
-        df2 = pd.read_sql(query2, engine)
-        df2['time'] = pd.to_datetime(df2['time'])
-        
-        # Merge
-        df = pd.merge(df1, df2, on='time', how='inner')
-        df = df.sort_values('time').reset_index(drop=True)
-        
-        return df
-    except Exception as e:
-        print(f"Error loading paired candles: {e}")
-        return None
+def get_paired_candles(engine, symbol1, symbol2, timeframe='1m', limit=100, analysis_mode="Live Candles (DB)"): # <--- MODIFIED: ADDED analysis_mode
+    """Load and align candle data for two symbols, supporting uploaded data source."""
+    
+    if analysis_mode == "Uploaded File":
+        try:
+            # --- NEW LOGIC: Load from the temporary UPLOADED table ---
+            
+            # Load ALL data from the temporary uploaded table
+            query = f"""
+                SELECT time, close
+                FROM {UPLOAD_TABLE_NAME}
+                ORDER BY time ASC
+            """
+            df_uploaded = pd.read_sql(query, engine)
+            df_uploaded['time'] = pd.to_datetime(df_uploaded['time'])
+            
+            # For pairs analysis, we need two series. We use the single 'close' column
+            # from the uploaded file for BOTH symbols (a testing simplification).
+            df_uploaded[f'price_{symbol1.lower()}'] = df_uploaded['close']
+            df_uploaded[f'price_{symbol2.lower()}'] = df_uploaded['close'] 
+            
+            # Limit the size (lookback) and return
+            df = df_uploaded.tail(limit).sort_values('time').reset_index(drop=True)
+            
+            # Check for minimum data length
+            if len(df) < 10:
+                print(f"Warning: Uploaded data only contains {len(df)} rows.")
+                return None
+                
+            return df
+            
+        except Exception as e:
+            print(f"Error loading uploaded data from {UPLOAD_TABLE_NAME}: {e}")
+            return None
+    
+    else: # analysis_mode == "Live Candles (DB)" (Existing logic remains the default)
+        try:
+            table_name = f"candles_{timeframe}"
+            
+            # Load symbol1
+            query1 = f"""
+                SELECT time, close as price_{symbol1.lower()}
+                FROM {table_name}
+                WHERE symbol = '{symbol1}'
+                ORDER BY time DESC
+                LIMIT {limit}
+            """
+            df1 = pd.read_sql(query1, engine)
+            df1['time'] = pd.to_datetime(df1['time'])
+            
+            # Load symbol2
+            query2 = f"""
+                SELECT time, close as price_{symbol2.lower()}
+                FROM {table_name}
+                WHERE symbol = '{symbol2}'
+                ORDER BY time DESC
+                LIMIT {limit}
+            """
+            df2 = pd.read_sql(query2, engine)
+            df2['time'] = pd.to_datetime(df2['time'])
+            
+            # Merge
+            df = pd.merge(df1, df2, on='time', how='inner')
+            df = df.sort_values('time').reset_index(drop=True)
+            
+            return df
+        except Exception as e:
+            print(f"Error loading paired candles: {e}")
+            return None
