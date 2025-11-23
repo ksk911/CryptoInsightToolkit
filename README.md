@@ -11,7 +11,6 @@ This application implements a comprehensive end-to-end analytical stack for real
 - Interactive trading dashboard with real-time charts, metrics, and alert management
 - PostgreSQL-backed data persistence with multi-timeframe OHLC candle generation
 - Telegram-integrated alert system for threshold-based trading signals
-- Historical data upload functionality for backtesting and external dataset analysis
 
 ### Design Philosophy
 
