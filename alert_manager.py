@@ -1,6 +1,7 @@
 import pandas as pd
 from datetime import datetime
 from typing import Dict, List, Optional
+from telegram_sender import send_telegram_message
 
 class Alert:
     """Individual alert configuration"""
@@ -73,7 +74,7 @@ class AlertManager:
     
     def check_alerts(self, current_metrics: Dict[str, float]) -> List[Dict]:
         """
-        Check all active alerts against current metrics
+        Check all active alerts against current metrics and send Telegram notifications.
         
         Returns:
             List of triggered alert info dicts
@@ -87,6 +88,34 @@ class AlertManager:
             current_value = current_metrics.get(alert.metric)
             
             if current_value is not None and alert.check(current_value):
+                
+                # --- NEW: TELEGRAM DISPATCH LOGIC ---
+                
+                # 1. Determine the recommended trading action (crucial for Z-Score signals)
+                action_text = ""
+                if alert.metric == 'zscore':
+                    if current_value > 0: # If Z-Score is positive (spread is high)
+                        action_text = "\n🔴 *ACTION: SHORT PAIR* (Sell BTC / Buy ETH Hedge)"
+                    else: # If Z-Score is negative (spread is low)
+                        action_text = "\n🟢 *ACTION: LONG PAIR* (Buy BTC / Sell ETH Hedge)"
+                
+                # 2. Build the message content for Telegram
+                metric_name = alert.metric.upper().replace("_", " ")
+                
+                telegram_message = (
+                    f"🚨 *TRADING ALERT: {metric_name}*\n"
+                    f"Condition: `{metric_name} {alert.condition} {alert.threshold}`\n"
+                    f"Current Value: *{current_value:.4f}*\n"
+                    f"Time: {alert.last_triggered.strftime('%H:%M:%S')}"
+                    f"{action_text}" # Append the action text
+                )
+                
+                # 3. Send the message
+                send_telegram_message(telegram_message)
+                
+                # --- END TELEGRAM DISPATCH LOGIC ---
+
+                # This section remains for the Streamlit dashboard display:
                 triggered.append({
                     'id': alert.alert_id,
                     'metric': alert.metric,
