@@ -79,7 +79,8 @@ with st.sidebar:
     st.info("💡 Use sidebar to switch to **Analytics** for pairs trading!")
     st.caption(f"Last update: {datetime.now().strftime('%H:%M:%S')}")
 
-# ---- Main Content ----
+# ---- Main Content Placeholder ----
+# This placeholder is no longer strictly necessary with Fragments but keeps the structure clean.
 placeholder = st.empty()
 
 def calculate_metrics(df):
@@ -95,7 +96,7 @@ def calculate_metrics(df):
     
     return current_price, price_change, price_change_pct, total_volume
 
-@st.cache_data(ttl=refresh_rate)
+@st.cache_data(ttl=3) # Use a static ttl for cache stability, 3 seconds is defined in the sidebar
 def load_data(symbol, timeframe, num_candles):
     """Load candle data from database"""
     table_name = f"candles_{timeframe}"
@@ -119,8 +120,14 @@ def load_data(symbol, timeframe, num_candles):
     except Exception as e:
         return None
 
-def load_and_plot():
+# ============================================
+# FRAGMENT: DYNAMIC DASHBOARD CONTENT
+# ============================================
+@st.experimental_fragment(run_every="3s") # Apply the fragment decorator using the 3s rate
+def load_and_plot(symbol, timeframe, num_candles, chart_type, show_volume):
     """Load data and create dashboard"""
+    
+    # We retrieve the refresh rate here to pass it to the cached function (though cache ttl is static)
     
     df = load_data(symbol, timeframe, num_candles)
     
@@ -139,159 +146,162 @@ def load_and_plot():
     
     current_price, price_change, price_change_pct, total_volume = calculate_metrics(df)
     
-    with placeholder.container():
-        # ---- Metrics Row ----
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric(
-                label=f"💰 {symbol} Price",
-                value=f"${current_price:,.2f}",
-                delta=f"{price_change:+.2f} ({price_change_pct:+.2f}%)"
-            )
-        
-        with col2:
-            st.metric("📈 High", f"${df['high'].max():,.2f}")
-        
-        with col3:
-            st.metric("📉 Low", f"${df['low'].min():,.2f}")
-        
-        with col4:
-            st.metric("📊 Volume", f"{total_volume:.4f}")
-        
-        st.markdown("---")
-        
-        # ---- Create Chart ----
-        if show_volume:
-            fig = make_subplots(
-                rows=2, cols=1,
-                shared_xaxes=True,
-                vertical_spacing=0.03,
-                row_heights=[0.7, 0.3],
-                subplot_titles=(f'{symbol} Price', 'Volume')
-            )
-        else:
-            fig = go.Figure()
-        
-        # Price Chart
-        if chart_type == "Candlestick":
-            candlestick = go.Candlestick(
-                x=df['time'],
-                open=df['open'],
-                high=df['high'],
-                low=df['low'],
-                close=df['close'],
-                name=symbol,
-                increasing_line_color='#26a69a',
-                decreasing_line_color='#ef5350',
-                increasing_fillcolor='#26a69a',
-                decreasing_fillcolor='#ef5350',
-                line=dict(width=1)
-            )
-            
-            if show_volume:
-                fig.add_trace(candlestick, row=1, col=1)
-            else:
-                fig = go.Figure(data=[candlestick])
-                
-        elif chart_type == "Line":
-            line = go.Scatter(
-                x=df['time'],
-                y=df['close'],
-                mode='lines',
-                name='Close Price',
-                line=dict(color='#00ff87', width=2)
-            )
-            
-            if show_volume:
-                fig.add_trace(line, row=1, col=1)
-            else:
-                fig = go.Figure(data=[line])
-                
-        else:  # OHLC
-            ohlc = go.Ohlc(
-                x=df['time'],
-                open=df['open'],
-                high=df['high'],
-                low=df['low'],
-                close=df['close'],
-                name=symbol,
-                increasing_line_color='#26a69a',
-                decreasing_line_color='#ef5350'
-            )
-            
-            if show_volume:
-                fig.add_trace(ohlc, row=1, col=1)
-            else:
-                fig = go.Figure(data=[ohlc])
-        
-        # Volume bars
-        if show_volume:
-            colors = ['#26a69a' if row['close'] >= row['open'] else '#ef5350' 
-                     for idx, row in df.iterrows()]
-            
-            volume_bars = go.Bar(
-                x=df['time'],
-                y=df['volume'],
-                name='Volume',
-                marker_color=colors,
-                opacity=0.7
-            )
-            fig.add_trace(volume_bars, row=2, col=1)
-        
-        # Layout styling
-        fig.update_layout(
-            height=700,
-            template='plotly_dark',
-            paper_bgcolor='#0e1117',
-            plot_bgcolor='#1e2130',
-            font=dict(color='#e0e0e0', size=12),
-            xaxis_rangeslider_visible=False,
-            showlegend=False,
-            margin=dict(t=50, b=50, l=50, r=50),
-            hovermode='x unified'
+    # All dynamic content is written directly without a placeholder, as the fragment isolates it.
+    
+    # ---- Metrics Row ----
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            label=f"💰 {symbol} Price",
+            value=f"${current_price:,.2f}",
+            delta=f"{price_change:+.2f} ({price_change_pct:+.2f}%)"
+        )
+    
+    with col2:
+        st.metric("📈 High", f"${df['high'].max():,.2f}")
+    
+    with col3:
+        st.metric("📉 Low", f"${df['low'].min():,.2f}")
+    
+    with col4:
+        st.metric("📊 Volume", f"{total_volume:.4f}")
+    
+    st.markdown("---")
+    
+    # ---- Create Chart ----
+    if show_volume:
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+            row_heights=[0.7, 0.3],
+            subplot_titles=(f'{symbol} Price', 'Volume')
+        )
+    else:
+        fig = go.Figure()
+    
+    # Price Chart
+    if chart_type == "Candlestick":
+        candlestick = go.Candlestick(
+            x=df['time'],
+            open=df['open'],
+            high=df['high'],
+            low=df['low'],
+            close=df['close'],
+            name=symbol,
+            increasing_line_color='#26a69a',
+            decreasing_line_color='#ef5350',
+            increasing_fillcolor='#26a69a',
+            decreasing_fillcolor='#ef5350',
+            line=dict(width=1)
         )
         
-        fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='#2e3241')
-        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#2e3241')
+        if show_volume:
+            fig.add_trace(candlestick, row=1, col=1)
+        else:
+            fig = go.Figure(data=[candlestick])
+            
+    elif chart_type == "Line":
+        line = go.Scatter(
+            x=df['time'],
+            y=df['close'],
+            mode='lines',
+            name='Close Price',
+            line=dict(color='#00ff87', width=2)
+        )
         
         if show_volume:
-            fig.update_yaxes(title_text="Price (USDT)", row=1, col=1)
-            fig.update_yaxes(title_text="Volume", row=2, col=1)
+            fig.add_trace(line, row=1, col=1)
+        else:
+            fig = go.Figure(data=[line])
+            
+    else:  # OHLC
+        ohlc = go.Ohlc(
+            x=df['time'],
+            open=df['open'],
+            high=df['high'],
+            low=df['low'],
+            close=df['close'],
+            name=symbol,
+            increasing_line_color='#26a69a',
+            decreasing_line_color='#ef5350'
+        )
         
-        st.plotly_chart(fig, use_container_width=True)
+        if show_volume:
+            fig.add_trace(ohlc, row=1, col=1)
+        else:
+            fig = go.Figure(data=[ohlc])
+    
+    # Volume bars
+    if show_volume:
+        colors = ['#26a69a' if row['close'] >= row['open'] else '#ef5350' 
+                 for idx, row in df.iterrows()]
         
-        # ---- Stats Table ----
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### 📊 Statistics")
-            stats_df = pd.DataFrame({
-                'Metric': ['Open', 'Close', 'High', 'Low', 'Range'],
-                'Value': [
-                    f"${df['open'].iloc[0]:,.2f}",
-                    f"${df['close'].iloc[-1]:,.2f}",
-                    f"${df['high'].max():,.2f}",
-                    f"${df['low'].min():,.2f}",
-                    f"${df['high'].max() - df['low'].min():,.2f}"
-                ]
-            })
-            st.dataframe(stats_df, use_container_width=True, hide_index=True)
-        
-        with col2:
-            st.markdown("### ⏱️ Time Info")
-            time_df = pd.DataFrame({
-                'Info': ['Start Time', 'End Time', 'Candles', 'Timeframe'],
-                'Value': [
-                    df['time'].iloc[0].strftime('%H:%M:%S'),
-                    df['time'].iloc[-1].strftime('%H:%M:%S'),
-                    len(df),
-                    timeframe.upper()
-                ]
-            })
-            st.dataframe(time_df, use_container_width=True, hide_index=True)
+        volume_bars = go.Bar(
+            x=df['time'],
+            y=df['volume'],
+            name='Volume',
+            marker_color=colors,
+            opacity=0.7
+        )
+        fig.add_trace(volume_bars, row=2, col=1)
+    
+    # Layout styling
+    fig.update_layout(
+        height=700,
+        template='plotly_dark',
+        paper_bgcolor='#0e1117',
+        plot_bgcolor='#1e2130',
+        font=dict(color='#e0e0e0', size=12),
+        xaxis_rangeslider_visible=False,
+        showlegend=False,
+        margin=dict(t=50, b=50, l=50, r=50),
+        hovermode='x unified'
+    )
+    
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='#2e3241')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#2e3241')
+    
+    if show_volume:
+        fig.update_yaxes(title_text="Price (USDT)", row=1, col=1)
+        fig.update_yaxes(title_text="Volume", row=2, col=1)
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # ---- Stats Table ----
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 📊 Statistics")
+        stats_df = pd.DataFrame({
+            'Metric': ['Open', 'Close', 'High', 'Low', 'Range'],
+            'Value': [
+                f"${df['open'].iloc[0]:,.2f}",
+                f"${df['close'].iloc[-1]:,.2f}",
+                f"${df['high'].max():,.2f}",
+                f"${df['low'].min():,.2f}",
+                f"${df['high'].max() - df['low'].min():,.2f}"
+            ]
+        })
+        st.dataframe(stats_df, use_container_width=True, hide_index=True)
+    
+    with col2:
+        st.markdown("### ⏱️ Time Info")
+        time_df = pd.DataFrame({
+            'Info': ['Start Time', 'End Time', 'Candles', 'Timeframe'],
+            'Value': [
+                df['time'].iloc[0].strftime('%H:%M:%S'),
+                df['time'].iloc[-1].strftime('%H:%M:%S'),
+                len(df),
+                timeframe.upper()
+            ]
+        })
+        st.dataframe(time_df, use_container_width=True, hide_index=True)
 
-# ---- Auto-refresh ----
-load_and_plot()
-time.sleep(refresh_rate)
-st.rerun()
+# ---- Auto-refresh Call ----
+# Pass all relevant variables to the fragment function
+load_and_plot(symbol, timeframe, num_candles, chart_type, show_volume) 
+
+# The old time.sleep(refresh_rate) and st.rerun() lines were removed, 
+# as the fragment decorator now handles the scheduling.

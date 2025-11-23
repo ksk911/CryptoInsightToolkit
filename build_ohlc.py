@@ -9,22 +9,46 @@ engine = create_engine("postgresql://postgres:kaustubh@localhost:5432/quantdb")
 print("=" * 60)
 print("🚀 Optimized Incremental Candle Generator")
 print("=" * 60)
-print("Strategy: Rolling window (last 60 minutes)")
+# Updated strategy description to reflect the new dynamic gap-filling:
+print("Strategy: Dynamic Gap-Filling (from last candle)") 
 print("Timeframes: 1s, 1m, 5m")
 print("Press Ctrl+C to stop\n")
 
-# Configuration
-LOOKBACK_MINUTES = 60  # Only process last 60 minutes
-
 def generate_candles():
-    """Generate OHLC candles from RECENT ticks only"""
+    """Generate OHLC candles from UNPROCESSED ticks since the last saved candle."""
     try:
-        # Calculate time window (last 60 minutes)
         now = datetime.now()
-        cutoff_time = now - timedelta(minutes=LOOKBACK_MINUTES)
-        cutoff_ts = int(cutoff_time.timestamp() * 1000)  # Convert to milliseconds
         
-        # Get ONLY recent tick data (optimized query)
+        # --- NEW LOGIC: DETERMINE START TIME ---
+        
+        # 1. Default start time: 60 minutes ago (safe fallback if tables are empty)
+        earliest_process_time = now - timedelta(minutes=60)
+        
+        # 2. Find the MAX(time) from the most frequently updated table (candles_1m)
+        try:
+            # We look up the latest time to ensure we don't reprocess any existing candles.
+            latest_candle = pd.read_sql(
+                f"SELECT MAX(time) as max_time FROM candles_1m", 
+                engine
+            )['max_time'].iloc[0]
+            
+            if latest_candle is not None:
+                # Convert to datetime and add a small buffer (1 second) to avoid duplicate processing
+                latest_time = pd.to_datetime(latest_candle).to_pydatetime()
+                
+                # Update the processing start time
+                earliest_process_time = latest_time + timedelta(seconds=1)
+            
+        except Exception:
+            # Ignore errors if the table doesn't exist or is empty (use default 60 min lookback)
+            pass
+
+        # Convert to milliseconds for the tick query
+        cutoff_ts = int(earliest_process_time.timestamp() * 1000)
+        
+        # --- END NEW LOGIC ---
+        
+        # Get ALL tick data since the earliest required processing time (optimized query)
         query = f"""
             SELECT ts, symbol, price, size 
             FROM ticks 
@@ -35,10 +59,11 @@ def generate_candles():
         df = pd.read_sql(query, engine)
         
         if df.empty:
-            print("⏳ No recent tick data...")
+            print(f"⏳ No new ticks since {earliest_process_time.strftime('%H:%M:%S')}")
             return
         
-        print(f"📥 Loaded {len(df):,} recent ticks (last {LOOKBACK_MINUTES} min)")
+        # The number of loaded ticks will now be variable, covering any gap
+        print(f"📥 Loaded {len(df):,} new ticks starting from {earliest_process_time.strftime('%H:%M:%S')}")
         
         # Convert timestamp to proper datetime
         df['timestamp'] = pd.to_datetime(df['ts'], unit='ms')
@@ -72,7 +97,7 @@ def generate_candles():
                 # Combine OHLC + Volume
                 candles = ohlc.join(volume)
                 candles.rename(columns={'size': 'volume'}, inplace=True)
-                candles = candles.dropna()
+                candles = candles.dropna() # Still drops candles with zero volume/price (correct behavior)
                 
                 if not candles.empty:
                     candles = candles.reset_index()
@@ -102,14 +127,14 @@ def generate_candles():
                         )
                         all_data = all_data.sort_values('time')
                         
-                        # Keep only recent data (to prevent table bloat)
-                        recent_cutoff = now - timedelta(hours=24)  # Keep 24 hours
+                        # Keep only recent data (7 days retention)
+                        recent_cutoff = now - timedelta(days=7)
                         all_data = all_data[all_data['time'] >= recent_cutoff]
                         
                         combined = all_data
                         print(f"  🔄 Merged with existing data")
                 
-                except Exception as e:
+                except Exception:
                     # Table doesn't exist or is empty, use new data only
                     print(f"  📝 Creating new table")
                 
@@ -127,8 +152,8 @@ def generate_candles():
 
 # ---- AUTO-RUN LOOP ----
 if __name__ == "__main__":
-    print(f"ℹ️  Using {LOOKBACK_MINUTES}-minute rolling window")
-    print(f"ℹ️  This prevents processing millions of old ticks\n")
+    print(f"ℹ️  Starting full pipeline generator...")
+    print(f"ℹ️  This will now fill historical gaps automatically.")
     
     while True:
         generate_candles()
