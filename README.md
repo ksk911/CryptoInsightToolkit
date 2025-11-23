@@ -1,5 +1,3 @@
-# Quant Developer Evaluation Assignment: Real-Time Pairs Trading Analytics Platform
-
 ## 1. Project Overview
 
 This application implements a comprehensive end-to-end analytical stack for real-time statistical arbitrage based on pairs trading strategies. The system demonstrates professional-grade software architecture designed for high-frequency trading environments, incorporating real-time data ingestion, quantitative analytics, and interactive visualization.
