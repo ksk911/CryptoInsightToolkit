@@ -5,6 +5,11 @@ from sqlalchemy import create_engine
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
+import os
+import tempfile
+
+# Import telegram sender
+from telegram_sender import send_telegram_document, send_telegram_message
 
 # ---- Page Config ----
 st.set_page_config(
@@ -26,11 +31,22 @@ st.markdown("""
         border: 1px solid #2e3241;
     }
     h1 {color: #00ff87; font-weight: 700;}
+    .export-section {
+        background-color: #1e2130;
+        padding: 20px;
+        border-radius: 10px;
+        border: 2px solid #00ff87;
+        margin-top: 30px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ---- Connect to PostgreSQL ----
-engine = create_engine("postgresql://postgres:kaustubh@localhost:5432/quantdb")
+try:
+    engine = create_engine("postgresql://postgres:kaustubh@localhost:5432/quantdb")
+except Exception as e:
+    st.error(f"❌ Database connection error: {e}")
+    st.stop()
 
 # ---- Header ----
 st.title("📈 Live Price Charts")
@@ -80,10 +96,6 @@ with st.sidebar:
     st.info("💡 Use sidebar to switch to **Analytics** for pairs trading!")
     st.caption(f"Last update: {datetime.now().strftime('%H:%M:%S')}")
 
-# ---- Main Content Placeholder ----
-# This placeholder is no longer strictly necessary with Fragments but keeps the structure clean.
-placeholder = st.empty()
-
 def calculate_metrics(df):
     """Calculate trading metrics"""
     if df.empty or len(df) < 2:
@@ -97,7 +109,7 @@ def calculate_metrics(df):
     
     return current_price, price_change, price_change_pct, total_volume
 
-@st.cache_data(ttl=3) # Use a static ttl for cache stability, 3 seconds is defined in the sidebar
+@st.cache_data(ttl=3)
 def load_data(symbol, timeframe, num_candles):
     """Load candle data from database"""
     table_name = f"candles_{timeframe}"
@@ -121,33 +133,112 @@ def load_data(symbol, timeframe, num_candles):
     except Exception as e:
         return None
 
+def export_data_to_csv(df, symbol, timeframe):
+    """Convert dataframe to CSV string for download"""
+    # Add metadata header
+    csv_data = f"# {symbol} Price Data\n"
+    csv_data += f"# Timeframe: {timeframe}\n"
+    csv_data += f"# Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+    csv_data += f"# Total Candles: {len(df)}\n"
+    csv_data += f"# Price Range: ${df['low'].min():.2f} - ${df['high'].max():.2f}\n"
+    csv_data += f"# Total Volume: {df['volume'].sum():.4f}\n"
+    csv_data += "#\n"
+    
+    # Add the actual data
+    csv_data += df.to_csv(index=False)
+    
+    return csv_data
+
+def send_csv_to_telegram(df, symbol, timeframe):
+    """Send CSV data to Telegram"""
+    
+    with st.spinner("📤 Preparing CSV for export..."):
+        temp_dir = tempfile.gettempdir()
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Create CSV file
+        csv_filename = f"{symbol}_{timeframe}_data_{timestamp}.csv"
+        csv_filepath = os.path.join(temp_dir, csv_filename)
+        
+        csv_content = export_data_to_csv(df, symbol, timeframe)
+        with open(csv_filepath, 'w') as f:
+            f.write(csv_content)
+        
+        # Prepare Telegram caption
+        current_price = df['close'].iloc[-1]
+        price_change = current_price - df['close'].iloc[0]
+        price_change_pct = (price_change / df['close'].iloc[0]) * 100
+        
+        caption = f"📊 *{symbol} Trading Data Export*\n\n"
+        caption += f"⏰ Timeframe: `{timeframe}`\n"
+        caption += f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        caption += f"📈 Candles: {len(df)}\n"
+        caption += f"💰 Current Price: ${current_price:,.2f}\n"
+        caption += f"📊 Change: {price_change:+.2f} ({price_change_pct:+.2f}%)\n"
+        caption += f"🔼 High: ${df['high'].max():,.2f}\n"
+        caption += f"🔽 Low: ${df['low'].min():,.2f}\n"
+        caption += f"📦 Volume: {df['volume'].sum():.4f}"
+        
+        # Send to Telegram
+        st.info("📱 Sending to Telegram...")
+        success = send_telegram_document(csv_filepath, caption=caption)
+        
+        if success:
+            st.success("✅ CSV file sent to Telegram successfully!")
+            
+            # Provide download button for local copy
+            with open(csv_filepath, 'r') as f:
+                st.download_button(
+                    label="📥 Download Local Copy",
+                    data=f.read(),
+                    file_name=csv_filename,
+                    mime="text/csv",
+                    key=f"download_csv_copy_{timestamp}",
+                    use_container_width=True
+                )
+        else:
+            st.error("❌ Failed to send CSV to Telegram")
+        
+        # Cleanup temp file
+        try:
+            if os.path.exists(csv_filepath):
+                os.remove(csv_filepath)
+        except Exception as e:
+            print(f"Warning: Could not delete temp file: {e}")
+        
+        return success
+
 # ============================================
 # FRAGMENT: DYNAMIC DASHBOARD CONTENT
 # ============================================
-@st.experimental_fragment(run_every="3s") # Apply the fragment decorator using the 3s rate
+@st.experimental_fragment(run_every="3s")
 def load_and_plot(symbol, timeframe, num_candles, chart_type, show_volume):
     """Load data and create dashboard"""
-    
-    # We retrieve the refresh rate here to pass it to the cached function (though cache ttl is static)
     
     df = load_data(symbol, timeframe, num_candles)
     
     if df is None or df.empty:
         st.warning(f"⏳ Waiting for {symbol} candle data...")
         st.info(f"""
-        **Make sure these are running:**
+        **System Status Check:**
         
-        **Terminal 1:** `python websocket_test.py`
+        If you're running via `run_system.py`, the background services should be collecting data automatically.
         
-        **Terminal 2:** `python build_ohlc.py`
+        **If running manually, make sure these are active:**
         
-        **Current:** {symbol} @ {timeframe} timeframe
+        **Terminal 1:** `python websocket_test.py` ← Collecting live ticks
+        
+        **Terminal 2:** `python build_ohlc.py` ← Building candles
+        
+        **Terminal 3:** `streamlit run Home.py` ← This dashboard
+        
+        **Current Settings:** {symbol} @ {timeframe} timeframe
+        
+        **Note:** It takes ~60 seconds to collect enough data for meaningful charts.
         """)
         return
     
     current_price, price_change, price_change_pct, total_volume = calculate_metrics(df)
-    
-    # All dynamic content is written directly without a placeholder, as the fragment isolates it.
     
     # ---- Metrics Row ----
     col1, col2, col3, col4 = st.columns(4)
@@ -299,10 +390,39 @@ def load_and_plot(symbol, timeframe, num_candles, chart_type, show_volume):
             ]
         })
         st.dataframe(time_df, use_container_width=True, hide_index=True)
+    
+    # ============================================
+    # EXPORT & SHARE SECTION (CSV ONLY)
+    # ============================================
+    
+    st.markdown("---")
+    st.markdown("<div class='export-section'>", unsafe_allow_html=True)
+    st.markdown("### 📤 Export & Share Data")
+    st.caption("Download price data locally or send to Telegram")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # CSV Download Button
+        csv_data = export_data_to_csv(df, symbol, timeframe)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        csv_filename = f"{symbol}_{timeframe}_data_{timestamp}.csv"
+        
+        st.download_button(
+            label="📥 Download CSV Locally",
+            data=csv_data,
+            file_name=csv_filename,
+            mime="text/csv",
+            help="Download price data as CSV file to your computer",
+            use_container_width=True
+        )
+    
+    with col2:
+        # Send to Telegram Button
+        if st.button("📱 Send CSV to Telegram", type="primary", use_container_width=True, help="Send CSV data to your Telegram"):
+            send_csv_to_telegram(df, symbol, timeframe)
+    
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ---- Auto-refresh Call ----
-# Pass all relevant variables to the fragment function
-load_and_plot(symbol, timeframe, num_candles, chart_type, show_volume) 
-
-# The old time.sleep(refresh_rate) and st.rerun() lines were removed, 
-# as the fragment decorator now handles the scheduling.
+load_and_plot(symbol, timeframe, num_candles, chart_type, show_volume)
