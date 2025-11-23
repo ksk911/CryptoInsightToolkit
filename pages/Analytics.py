@@ -33,6 +33,8 @@ st.set_page_config(
 # CUSTOM CSS STYLING
 # ============================================
 
+ALL_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "DOTUSDT", "MATICUSDT", "LTCUSDT", "LINKUSDT", "TRXUSDT"]
+
 st.markdown("""
 <style>
     .main {background-color: #0e1117;}
@@ -81,8 +83,8 @@ with st.sidebar:
     
     # Symbol Pair Selection
     st.subheader("Symbol Pair")
-    symbol1 = st.selectbox("Asset 1", ["BTCUSDT", "ETHUSDT"], index=0, key="sym1")
-    symbol2 = st.selectbox("Asset 2", ["BTCUSDT", "ETHUSDT"], index=1, key="sym2")
+    symbol1 = st.selectbox("Asset 1", ALL_SYMBOLS, index=0, key="sym1")
+    symbol2 = st.selectbox("Asset 2", ALL_SYMBOLS, index=1, key="sym2")
     
     if symbol1 == symbol2:
         st.error("⚠️ Please select different symbols!")

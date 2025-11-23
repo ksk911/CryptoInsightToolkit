@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 engine = create_engine("postgresql://postgres:kaustubh@localhost:5432/quantdb")
 
 # ---- CONFIGURATION ----
-SYMBOLS = ["btcusdt", "ethusdt"]  # Multiple symbols for pairs trading
+SYMBOLS = ["btcusdt", "ethusdt","bnbusdt", "solusdt", "xrpusdt", "adausdt", "dogeusdt", "dotusdt", "maticusdt", "ltcusdt", "linkusdt", "trxusdt"]  # Multiple symbols for pairs trading
 
 class MultiSymbolCollector:
     def __init__(self, symbols):
@@ -48,7 +48,7 @@ class MultiSymbolCollector:
             
             # 2. Define minimum price threshold. BTC/ETH should never be below this.
             # We use 1000 as a safe, generous floor for major cryptos.
-            MIN_PRICE_THRESHOLD = 1000 
+            MIN_PRICE_THRESHOLD =1
             
             # 3. APPLY THE FILTER: Drop the tick if price is too low or size is zero/negative.
             if price < MIN_PRICE_THRESHOLD or size <= 0:

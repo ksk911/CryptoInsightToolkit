@@ -13,6 +13,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+ALL_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "DOTUSDT", "MATICUSDT", "LTCUSDT", "LINKUSDT", "TRXUSDT"]
 
 # ---- Custom CSS ----
 st.markdown("""
@@ -41,7 +42,7 @@ with st.sidebar:
     
     symbol = st.selectbox(
         "Select Symbol",
-        ["BTCUSDT", "ETHUSDT"],
+        ALL_SYMBOLS,
         index=0,
         help="Choose trading pair"
     )
