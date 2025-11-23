@@ -11,6 +11,8 @@ from sqlalchemy import create_engine
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
+import os
+import tempfile
 
 # Import analytics module
 from analytics import PairsAnalytics, get_paired_candles
@@ -18,6 +20,9 @@ from analytics import PairsAnalytics, get_paired_candles
 # Import alert system modules
 from alert_manager import AlertManager
 import alert_components
+
+# Import telegram sender
+from telegram_sender import send_telegram_document
 
 # ============================================
 # PAGE CONFIGURATION
@@ -46,6 +51,13 @@ st.markdown("""
     }
     h1 {color: #00ff87; font-weight: 700;}
     h2, h3, h4 {color: #e0e0e0;}
+    .export-section {
+        background-color: #1e2130;
+        padding: 20px;
+        border-radius: 10px;
+        border: 2px solid #00ff87;
+        margin-top: 30px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -93,15 +105,13 @@ with st.sidebar:
     # Timeframe Selection
     timeframe = st.selectbox("Timeframe", ["1s", "1m", "5m"], index=1, key="tf")
     
-    # --- Data Source Selector (Previously Added) ---
+    # --- Data Source Selector ---
     st.markdown("---")
     st.header("Data Source")
 
-    # Initialize state variable for the analysis source
     if 'analysis_source' not in st.session_state:
         st.session_state.analysis_source = "Live Candles (DB)"
         
-    # Check if an uploaded file exists (set by Upload_Data.py)
     uploaded_ready = st.session_state.get('uploaded_data_ready', False)
 
     options = ["Live Candles (DB)"]
@@ -111,76 +121,186 @@ with st.sidebar:
     analysis_mode = st.radio(
         "Select Source",
         options,
-        # Set the index based on the current state, handling cases where the 'Uploaded File' option is present or not
         index=options.index(st.session_state.analysis_source) if st.session_state.analysis_source in options else 0,
         key='analysis_mode_radio',
         help="Switch between live stream data and a file uploaded via the 'Upload Data' page."
     )
-    # Ensure the session state is updated if the user selects the mode
     st.session_state.analysis_source = analysis_mode 
-    # --- End Data Source Selector ---
     
     # Analysis Parameters
     st.subheader("Parameters")
     lookback = st.slider("Lookback Period", 20, 200, 100, help="Number of candles to analyze")
     zscore_window = st.slider("Z-Score Window", 10, 50, 20, help="Rolling window for z-score calculation")
     
-    # --- NEW: Regression Type Control ---
     regression_type = st.selectbox(
         "Regression Type",
         options=["OLS (Ordinary Least Squares)", "Kalman Filter (Extension)"],
         index=0,
         help="Select the method for calculating the optimal hedge ratio."
     )
-    # --- END NEW ---
     
     # Trading Thresholds
     st.subheader("Trading Thresholds")
     entry_threshold = st.slider("Entry Z-Score", 1.0, 3.0, 2.0, 0.1, help="Z-score level to enter trade")
     exit_threshold = st.slider("Exit Z-Score", 0.0, 1.5, 0.5, 0.1, help="Z-score level to exit trade")
     
-    # Refresh Rate (Used by the fragment scheduler below)
     refresh_rate = st.slider("Refresh (seconds)", 3, 15, 5)
     
-    # Show alert summary in sidebar
     alert_components.show_alert_summary_sidebar()
     
-    # Last update timestamp
     st.caption(f"🕐 Last update: {datetime.now().strftime('%H:%M:%S')}")
 
 # ============================================
-# DATA LOADING CACHED FUNCTION (MODIFIED SIGNATURE)
+# HELPER FUNCTIONS FOR CSV EXPORT
 # ============================================
 
-# ADD 'analysis_mode' and 'regression_type' as parameters
+def export_analytics_to_csv(df, symbol1, symbol2, timeframe, spread, zscore, correlation, signals, hedge_result):
+    """Convert analytics dataframe to CSV string with metadata and formulas"""
+    
+    # Build metadata header with formulas
+    csv_data = f"# Pairs Trading Analytics Export\n"
+    csv_data += f"# Pair: {symbol1} / {symbol2}\n"
+    csv_data += f"# Timeframe: {timeframe}\n"
+    csv_data += f"# Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+    csv_data += f"# Total Data Points: {len(df)}\n"
+    csv_data += f"#\n"
+    csv_data += f"# === CALCULATION FORMULAS ===\n"
+    csv_data += f"# Hedge Ratio (β): Calculated using OLS regression: {symbol1} = α + β × {symbol2}\n"
+    csv_data += f"# Hedge Ratio Value: {hedge_result['hedge_ratio']:.6f}\n"
+    csv_data += f"# R-Squared: {hedge_result['r_squared']:.6f}\n"
+    csv_data += f"#\n"
+    csv_data += f"# Spread = Price_{symbol1} - (Hedge_Ratio × Price_{symbol2})\n"
+    csv_data += f"# Z-Score = (Spread - Rolling_Mean) / Rolling_StdDev\n"
+    csv_data += f"# Correlation = Rolling correlation between {symbol1} and {symbol2} prices\n"
+    csv_data += f"# Signal: 1 = LONG, -1 = SHORT, 0 = NEUTRAL/EXIT\n"
+    csv_data += f"#\n"
+    csv_data += f"# === TRADING LOGIC ===\n"
+    csv_data += f"# LONG Signal: Z-Score < -{entry_threshold} (Spread abnormally low)\n"
+    csv_data += f"# SHORT Signal: Z-Score > +{entry_threshold} (Spread abnormally high)\n"
+    csv_data += f"# EXIT Signal: |Z-Score| < {exit_threshold} (Spread near mean)\n"
+    csv_data += f"#\n"
+    
+    # Create export dataframe
+    export_df = pd.DataFrame({
+        'time': df['time'],
+        f'price_{symbol1.lower()}': df[f'price_{symbol1.lower()}'],
+        f'price_{symbol2.lower()}': df[f'price_{symbol2.lower()}'],
+        'spread': spread,
+        'zscore': zscore,
+        'correlation': correlation,
+        'trading_signal': signals,
+        'hedge_ratio': hedge_result['hedge_ratio']
+    })
+    
+    # Add the actual data
+    csv_data += export_df.to_csv(index=False)
+    
+    return csv_data
+
+def send_analytics_csv_to_telegram(df, symbol1, symbol2, timeframe, spread, zscore, correlation, signals, hedge_result, current_metrics):
+    """Send analytics CSV data to Telegram"""
+    
+    try:
+        temp_dir = tempfile.gettempdir()
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Create CSV file
+        csv_filename = f"{symbol1}_{symbol2}_analytics_{timeframe}_{timestamp}.csv"
+        csv_filepath = os.path.join(temp_dir, csv_filename)
+        
+        # Generate CSV content
+        csv_content = export_analytics_to_csv(df, symbol1, symbol2, timeframe, spread, zscore, correlation, signals, hedge_result)
+        
+        # Write file and ensure it's flushed to disk
+        with open(csv_filepath, 'w', encoding='utf-8') as f:
+            f.write(csv_content)
+            f.flush()
+            os.fsync(f.fileno())  # Force write to disk
+        
+        # Verify file exists and has content
+        if not os.path.exists(csv_filepath):
+            st.error("❌ Failed to create CSV file")
+            return False
+        
+        file_size = os.path.getsize(csv_filepath)
+        if file_size == 0:
+            st.error("❌ CSV file is empty")
+            return False
+        
+        # Prepare Telegram caption
+        current_z = current_metrics.get('zscore', 0)
+        current_spread = current_metrics.get('spread', 0)
+        current_corr = current_metrics.get('correlation', 0)
+        
+        # Determine current signal
+        signal_text = "NEUTRAL/EXIT"
+        if not signals.dropna().empty:
+            current_signal = signals.dropna().iloc[-1]
+            if current_signal == 1:
+                signal_text = "🟢 LONG"
+            elif current_signal == -1:
+                signal_text = "🔴 SHORT"
+        
+        caption = f"📊 *Pairs Trading Analytics Export*\n\n"
+        caption += f"📈 Pair: {symbol1} / {symbol2}\n"
+        caption += f"⏰ Timeframe: `{timeframe}`\n"
+        caption += f"📅 Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        caption += f"📊 Data Points: {len(df)}\n\n"
+        caption += f"*Current Metrics:*\n"
+        caption += f"⚖️ Hedge Ratio: {hedge_result['hedge_ratio']:.4f}\n"
+        caption += f"📉 R²: {hedge_result['r_squared']:.4f}\n"
+        caption += f"📏 Spread: {current_spread:.2f}\n"
+        caption += f"📊 Z-Score: {current_z:.2f}\n"
+        caption += f"🔗 Correlation: {current_corr:.2f}\n"
+        caption += f"🎯 Signal: {signal_text}"
+        
+        # Send to Telegram with status message
+        with st.spinner("📱 Sending to Telegram..."):
+            success = send_telegram_document(csv_filepath, caption=caption)
+        
+        if success:
+            st.success("✅ Analytics CSV sent to Telegram successfully!")
+            st.info(f"📄 File: {csv_filename} ({file_size/1024:.1f} KB)")
+        else:
+            st.error("❌ Failed to send CSV to Telegram. Check console for errors.")
+        
+        # Don't delete immediately - let it persist briefly
+        # Temp folder will auto-cleanup eventually
+        
+        return success
+        
+    except Exception as e:
+        st.error(f"❌ Error preparing analytics CSV: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        return False
+
+# ============================================
+# DATA LOADING CACHED FUNCTION
+# ============================================
+
 @st.cache_data(ttl=refresh_rate, show_spinner=False)
-def load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode, regression_type): # <--- MODIFIED
+def load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode, regression_type):
     """Load paired candle data from database or uploaded table."""
     try:
-        # Pass the analysis_mode to the actual data loading utility in analytics.py
-        # NOTE: regression_type is currently not used here, but passed for architectural completeness
         df = get_paired_candles(engine, symbol1, symbol2, timeframe, lookback, analysis_mode)
         return df
     except Exception as e:
-        # Note: st.error/st.stop() cannot be used inside cached functions
         return None
 
 # ============================================
-# FRAGMENT: DYNAMIC DASHBOARD CONTENT (MODIFIED SIGNATURE AND CALL)
+# FRAGMENT: DYNAMIC DASHBOARD CONTENT
 # ============================================
 
-# The Fragment decorator handles scheduling and isolating the rerun, replacing time.sleep/st.rerun
-@st.experimental_fragment(run_every="5s") # Using 5s as a static default for stability
-def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_window, entry_threshold, exit_threshold, analysis_mode, regression_type): # <--- MODIFIED
+@st.experimental_fragment(run_every="5s")
+def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_window, entry_threshold, exit_threshold, analysis_mode, regression_type):
     
     # Load data with spinner
     with st.spinner(f"Loading {symbol1}/{symbol2} data..."):
-        # Pass the analysis_mode and regression_type variables to load_analytics_data
-        df = load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode, regression_type) # <--- MODIFIED
+        df = load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode, regression_type)
 
     # Check if data is available
     if df is None or df.empty or len(df) < 10:
-        # Adjusted warning message based on data source
         if analysis_mode == "Uploaded File":
             st.warning("⏳ No data available from the Uploaded File. Please check the 'Upload Data' page.")
         else:
@@ -191,19 +311,16 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
             2. Make sure build_ohlc.py is running (generating candles)
             3. Wait a few minutes for data to accumulate
             """)
-        return # Use 'return' instead of st.stop() inside a fragment
+        return
 
     # ============================================
-    # RUN ANALYTICS CALCULATIONS 
-    # NOTE: If regression_type changes, this section should eventually use that value.
-    # Currently, it defaults to OLS inside calculate_hedge_ratio.
+    # RUN ANALYTICS CALCULATIONS
     # ============================================
     try:
         prices1 = df[f'price_{symbol1.lower()}']
         prices2 = df[f'price_{symbol2.lower()}']
         
-        # In a future update, you would pass regression_type here
-        hedge_result = analytics.calculate_hedge_ratio(prices1, prices2) 
+        hedge_result = analytics.calculate_hedge_ratio(prices1, prices2)
         
         if hedge_result is None:
             st.error("❌ Could not calculate hedge ratio. Need more data.")
@@ -232,7 +349,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
         return
 
     # ============================================
-    # PREPARE METRICS FOR ALERT CHECKING 
+    # PREPARE METRICS FOR ALERT CHECKING
     # ============================================
     current_metrics = {}
     if zscore is not None and not zscore.dropna().empty:
@@ -246,7 +363,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
         current_metrics['r_squared'] = hedge_result['r_squared']
 
     # ============================================
-    # CHECK AND DISPLAY TRIGGERED ALERTS 
+    # CHECK AND DISPLAY TRIGGERED ALERTS
     # ============================================
     triggered_alerts = st.session_state.alert_manager.check_alerts(current_metrics)
 
@@ -254,7 +371,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
         alert_components.display_triggered_alerts(triggered_alerts)
 
     # ============================================
-    # KEY METRICS DISPLAY 
+    # KEY METRICS DISPLAY
     # ============================================
 
     st.markdown("### 📈 Key Metrics")
@@ -279,7 +396,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     st.markdown("---")
 
     # ============================================
-    # CHART 1: PRICE COMPARISON 
+    # CHART 1: PRICE COMPARISON
     # ============================================
     st.markdown("### 💹 Price Comparison")
     fig1 = make_subplots(specs=[[{"secondary_y": True}]])
@@ -292,11 +409,11 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     st.markdown("---")
 
     # ============================================
-    # CHART 2 & 3: SPREAD & Z-SCORE 
+    # CHART 2 & 3: SPREAD & Z-SCORE
     # ============================================
     if spread is not None and zscore is not None and not zscore.dropna().empty:
         st.markdown("### 📊 Spread & Z-Score Analysis")
-        # Spread chart
+        
         st.markdown("#### 📈 Spread (Price Difference)")
         fig_spread = go.Figure()
         fig_spread.add_trace(go.Scatter(x=df['time'], y=spread, name='Spread', line=dict(color='#3b82f6', width=2)))
@@ -351,7 +468,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     st.markdown("")
 
     # ============================================
-    # CHART 4: ROLLING CORRELATION 
+    # CHART 4: ROLLING CORRELATION
     # ============================================
     if correlation is not None and not correlation.dropna().empty:
         st.markdown("### 🔗 Rolling Correlation")
@@ -380,7 +497,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     st.markdown("---")
 
     # ============================================
-    # STATISTICS PANEL 
+    # STATISTICS PANEL
     # ============================================
     st.markdown("### 📋 Detailed Statistics")
     col1, col2 = st.columns(2)
@@ -402,7 +519,7 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     st.markdown("---")
 
     # ============================================
-    # TRADING SIGNALS 
+    # TRADING SIGNALS
     # ============================================
     if signals is not None and zscore is not None and not zscore.dropna().empty:
         st.markdown("### 🎯 Current Trading Signal")
@@ -413,7 +530,8 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
             st.success(f"""
             ### 🟢 LONG SIGNAL
             **Z-Score:** {current_z:.2f} (Below -{entry_threshold})
-            **Recommended Action:** - Buy {symbol1}
+            **Recommended Action:** 
+            - Buy {symbol1}
             - Sell {hedge_result['hedge_ratio']:.4f} units of {symbol2}
             **Rationale:** Spread is abnormally low, expecting mean reversion upward
             """)
@@ -436,12 +554,45 @@ def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_wi
     else:
         st.warning("⚠️ Cannot generate trading signals: insufficient data")
 
+    # ============================================
+    # NEW: EXPORT & SHARE ANALYTICS SECTION
+    # ============================================
+    
+    st.markdown("---")
+    st.markdown("<div class='export-section'>", unsafe_allow_html=True)
+    st.markdown("### 📤 Export Analytics Data")
+    st.caption("Download complete analytics with formulas or send to Telegram")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # CSV Download Button
+        csv_data = export_analytics_to_csv(df, symbol1, symbol2, timeframe, spread, zscore, correlation, signals, hedge_result)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        csv_filename = f"{symbol1}_{symbol2}_analytics_{timeframe}_{timestamp}.csv"
+        
+        st.download_button(
+            label="📥 Download Analytics CSV",
+            data=csv_data,
+            file_name=csv_filename,
+            mime="text/csv",
+            help="Download complete analytics data with calculation formulas",
+            use_container_width=True,
+            key=f"download_analytics_{timestamp}"
+        )
+    
+    with col2:
+        # Send to Telegram Button (remove timestamp from key to avoid regeneration issues)
+        if st.button("📱 Send Analytics to Telegram", type="primary", use_container_width=True, help="Send analytics CSV to your Telegram"):
+            send_analytics_csv_to_telegram(df, symbol1, symbol2, timeframe, spread, zscore, correlation, signals, hedge_result, current_metrics)
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+
 
 # ============================================
-# MAIN EXECUTION CALL (MODIFIED ARGUMENTS)
+# MAIN EXECUTION CALL
 # ============================================
 
-# Call the fragment function, passing all necessary sidebar variables as arguments, including the new analysis_mode and regression_type.
 display_analytics_dashboard(
     symbol1, 
     symbol2, 
@@ -453,8 +604,3 @@ display_analytics_dashboard(
     st.session_state.analysis_source,
     regression_type 
 )
-
-# ============================================
-# NOTE: The old time.sleep(refresh_rate) and st.rerun() are REMOVED.
-# The Fragment decorator handles the scheduling now, giving you the smooth UX.
-# ============================================
