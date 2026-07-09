@@ -73,8 +73,8 @@ with st.sidebar:
     num_candles = st.slider(
         "Candles to Display", 
         min_value=20, 
-        max_value=200, 
-        value=60,
+        max_value=60, 
+        value=30,
         help="Number of candles to show"
     )
     
@@ -211,7 +211,7 @@ def send_csv_to_telegram(df, symbol, timeframe):
 # ============================================
 # FRAGMENT: DYNAMIC DASHBOARD CONTENT
 # ============================================
-@st.experimental_fragment(run_every="3s")
+@st.fragment(run_every="3s")
 def load_and_plot(symbol, timeframe, num_candles, chart_type, show_volume):
     """Load data and create dashboard"""
     
@@ -385,7 +385,7 @@ def load_and_plot(symbol, timeframe, num_candles, chart_type, show_volume):
             'Value': [
                 df['time'].iloc[0].strftime('%H:%M:%S'),
                 df['time'].iloc[-1].strftime('%H:%M:%S'),
-                len(df),
+                str(len(df)),
                 timeframe.upper()
             ]
         })

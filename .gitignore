@@ -9,3 +9,4 @@ __pycache__/
 
 # Specific large data files/browser saves
 binance_browser_collector_save_test (1) (2) (1).html
+venv/

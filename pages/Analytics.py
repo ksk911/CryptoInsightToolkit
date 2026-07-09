@@ -292,7 +292,7 @@ def load_analytics_data(symbol1, symbol2, timeframe, lookback, analysis_mode, re
 # FRAGMENT: DYNAMIC DASHBOARD CONTENT
 # ============================================
 
-@st.experimental_fragment(run_every="5s")
+@st.fragment(run_every="5s")
 def display_analytics_dashboard(symbol1, symbol2, timeframe, lookback, zscore_window, entry_threshold, exit_threshold, analysis_mode, regression_type):
     
     # Load data with spinner

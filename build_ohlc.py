@@ -36,8 +36,8 @@ def generate_candles():
                 # Convert to datetime and add a small buffer (1 second) to avoid duplicate processing
                 latest_time = pd.to_datetime(latest_candle).to_pydatetime()
                 
-                # Update the processing start time
-                earliest_process_time = latest_time + timedelta(seconds=1)
+                # Update the processing start time (do not go back further than 60 mins to prevent memory issues)
+                earliest_process_time = max(now - timedelta(minutes=60), latest_time + timedelta(seconds=1))
             
         except Exception:
             # Ignore errors if the table doesn't exist or is empty (use default 60 min lookback)
@@ -75,9 +75,9 @@ def generate_candles():
         
         # Generate candles for multiple timeframes
         timeframes = {
-            '1S': 'candles_1s',
-            '1T': 'candles_1m',
-            '5T': 'candles_5m'
+            '1s': 'candles_1s',
+            '1min': 'candles_1m',
+            '5min': 'candles_5m'
         }
         
         for interval, table_name in timeframes.items():
